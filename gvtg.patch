@@ -1,7 +1,7 @@
 From ef0bad4b5e7f370b32a3826add1ab03a7bb5b46e Mon Sep 17 00:00:00 2001
 From: Konstantin Anisimov <rrevenantt@gmail.com>
 Date: Mon, 4 May 2015 04:09:14 +0300
-Subject: [PATCH 1/2] most changes done
+Subject: [PATCH 1/3] most changes done
 
 ---
  drivers/gpu/drm/i915/vgt/aperture_gm.c |   5 +-
@@ -624,7 +624,7 @@ index 0b688c7..75f01ae 100644
 From ad442e81b88d28ee371d893452b1804c51358135 Mon Sep 17 00:00:00 2001
 From: Konstantin Anisimov <rrevenantt@gmail.com>
 Date: Thu, 21 May 2015 14:41:14 +0300
-Subject: [PATCH 2/2] some buggy changes. To start new brach
+Subject: [PATCH 2/3] some buggy changes. To start new brach
 
 ---
  drivers/gpu/drm/i915/vgt/debugfs.c  |  30 ++++
@@ -1506,6 +1506,765 @@ index 75f01ae..2c080b8 100644
  void vgt_update_monitor_status(struct vgt_device *vgt);
  void vgt_detect_display(struct vgt_device *vgt, int index);
  void vgt_dpy_init_modes(vgt_reg_t *mmio_array);
+-- 
+1.9.1
+
+
+From e147591991745e25fdec2da21a4e219ba2203abc Mon Sep 17 00:00:00 2001
+From: Konstantin Anisimov <rrevenantt@gmail.com>
+Date: Fri, 19 Jun 2015 05:02:59 +0300
+Subject: [PATCH 3/3] some tests for getting virtual monitor data from VM
+ memory
+
+---
+ drivers/gpu/drm/i915/vgt/debugfs.c   | 177 +++++++++++++++++++++++++++++++++++
+ drivers/gpu/drm/i915/vgt/display.c   |  27 +++---
+ drivers/gpu/drm/i915/vgt/gtt.c       |   2 +-
+ drivers/gpu/drm/i915/vgt/handlers.c  |  38 +++++++-
+ drivers/gpu/drm/i915/vgt/hypercall.h |   4 +
+ drivers/gpu/drm/i915/vgt/interrupt.c |  14 +--
+ drivers/gpu/drm/i915/vgt/vgt.h       |  28 +++++-
+ drivers/xen/xengt.c                  |  99 ++++++++++++++++++++
+ include/xen/interface/memory.h       |  63 +++++++++++++
+ include/xen/interface/xen.h          |  52 +++++++++-
+ 10 files changed, 477 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/vgt/debugfs.c b/drivers/gpu/drm/i915/vgt/debugfs.c
+index 78cc0f3..b6aa3fd 100644
+--- a/drivers/gpu/drm/i915/vgt/debugfs.c
++++ b/drivers/gpu/drm/i915/vgt/debugfs.c
+@@ -23,6 +23,8 @@
+ #include <linux/module.h>
+ #include <linux/pci.h>
+ #include <linux/debugfs.h>
++#include <linux/mm.h>
++#include <xen/interface/xen.h>
+ #include "fb_decoder.h"
+ 
+ #include "vgt.h"
+@@ -102,6 +104,7 @@ enum vgt_debugfs_entry_t
+ 	VGT_DEBUGFS_FB_FORMAT,
+ 	VGT_DEBUGFS_DPY_INFO,
+ 	VGT_DEBUGFS_VIRTUAL_GTT,
++	VGT_DEBUGFS_PIPEA_PRIMARY_SURF,
+ 	VGT_DEBUGFS_ENTRY_MAX
+ };
+ 
+@@ -472,6 +475,173 @@ static const struct file_operations fbinfo_fops = {
+ 	.release = single_release,
+ };
+ 
++extern int vgt_decode_primary_plane_format(struct vgt_device *vgt,
++										   int pipe, struct vgt_primary_plane_format *plane);
++
++#define getbit(x,y) (((x) & (1 << (y))) >> (y))
++
++static int __attribute__((unused)) vgt_show_prisurfa(struct seq_file *m, void *data)
++{
++	struct vgt_device *vgt =  (struct vgt_device *)m->private;
++	//uint64_t gma = __vreg(vgt, VGT_DSPSURF(PIPE_A));
++	//uint64_t va = (uint64_t)vgt_gma_to_va(vgt->gtt.ggtt_mm, gma);
++	u_int i,j;
++	uint64_t time1 = ktime_to_ns(ktime_get());
++	uint64_t time2;
++	vgt_info(" time %lld\n",time1);
++//	struct vgt_primary_plane_format primary_plane_format;
++
++//	vgt_decode_primary_plane_format(vgt, PIPE_A, &primary_plane_format);
++
++	for (j = 0; j < 32; j++) {
++	//	uint64_t va = (uint64_t)vgt_gma_to_va(vgt->gtt.ggtt_mm, gma);
++		int k,l;
++
++		for (k = 0; k < 8; k++) {
++			uint64_t gma = VGT_MMIO_READ(vgt->pdev, _REG_DSPASURFLIVE) + j * 8 * (__vreg(vgt, VGT_DSPSTRIDE(PIPE_A)));
++
++			for (l = 0; l < 13; l++) {
++				uint64_t gma2 = gma + PAGE_SIZE*l;
++				uint64_t va2 = (uint64_t) vgt_gma_to_va(vgt->gtt.ggtt_mm, gma2);
++
++				for (i = 0; i < 512; i++) {
++					uint64_t vv = va2 + i + k * 512;
++					uint64_t vv2 = (vv & ~(((uint64_t) 1) << 6))
++								   | (((getbit(vv, 6)) ^ getbit(vv, 9) ^ getbit(vv, 10)) << 6);
++
++					seq_putc(m, *(char *) (vv2));
++				}
++
++			//	for (i = 0; i < 512; i++) {
++			//		uint64_t vv = va2 + i + l * 512;
++			//		uint64_t vv2 =
++			//				(vv & ~(((uint64_t) 1) << 6)) | (((getbit(vv, 6)) ^ getbit(vv, 9) ^ getbit(vv, 10)) << 6);
++
++			//		seq_putc(m, *(char *) (vv2));
++			//	}
++			}
++		}
++	}
++	time2 = ktime_to_ns(ktime_get());
++	printk("getdisplay time taken %lld\n", time2 - time1);
++	return 0;
++}
++
++static int  prisurfa_open(struct inode *inode, struct file *file)
++{
++	struct mmap_info* info = kmalloc(sizeof(struct mmap_info), GFP_KERNEL);
++	struct vgt_device* vgt = (struct vgt_device*)inode->i_private;
++	info->vgt = vgt;
++	info->data = (void*) get_zeroed_page(GFP_KERNEL);
++	*((uint64_t*) info->data) = 0x0101;
++	file->private_data = info;
++	vgt_info(" open");
++
++	return 0;//single_open(file, vgt_show_prisurfa, inode->i_private);
++}
++
++static int prisurfa_release(struct inode *inode, struct file *file)
++{
++	vgt_info(" release");
++	free_page((uint64_t)((struct mmap_info*)file->private_data)->data);
++	kfree(file->private_data);
++	return 0;//single_release(inode, file);
++}
++
++static void mmap_open(struct vm_area_struct *vma)
++{
++	struct mmap_info *info = (struct mmap_info *)vma->vm_private_data;
++	uint64_t handle;
++	struct vgt_device * vgt = (struct vgt_device *) vma->vm_private_data;
++	uint64_t gma = VGT_MMIO_READ(vgt->pdev, _REG_DSPASURFLIVE);
++	uint64_t gpa = (uint64_t)vgt_gma_to_gpa(vgt->gtt.ggtt_mm, gma);
++
++	int rc = hypervisor_xen_domctl_memsharing_nominate_share_gfn(vgt->vm_id, (char*)gpa, &handle);
++	if (rc != 0){
++		printk("memsharing _nominate error %d\n",rc);
++		//	goto err;
++	}
++	printk("memsharing _nominate OK  vm=%d\n", vgt->vm_id);
++
++	info->reference++;
++}
++
++static void mmap_close(struct vm_area_struct *vma)
++{
++	struct mmap_info *info = (struct mmap_info *)vma->vm_private_data;
++	info->reference--;
++}
++
++static int mmap_fault(struct vm_area_struct *vma,struct vm_fault * vmf)
++{
++//	struct vgt_device * vgt = (struct vgt_device *) vma->vm_private_data;
++//	uint64_t gma = VGT_MMIO_READ(vgt->pdev, _REG_DSPASURFLIVE);
++//	uint64_t gpa = (uint64_t)vgt_gma_to_gpa(vgt->gtt.ggtt_mm, gma);
++//	uint64_t mfn = hypervisor_g2m_pfn(vgt, gpa >> PAGE_SHIFT);
++//	uint64_t va = (uint64_t)vgt->mem_buf;//(uint64_t)vgt_gma_to_va(vgt->gtt.ggtt_mm, gma);
++	uint64_t va2 = (uint64_t)((struct mmap_info*)vma->vm_private_data)->data;//(uint64_t)kmalloc(PAGE_SIZE, GFP_USER);
++	struct page * page;
++/*
++	uint64_t handle;
++	int rc = hypervisor_xen_domctl_memsharing_nominate_share_gfn(vgt->vm_id, (char*)gpa, &handle);
++	if (rc != 0){
++		printk("memsharing _nominate error %d\n",rc);
++		//	goto err;
++	}
++	printk("memsharing _nominate OK  vm=%d\n", vgt->vm_id);
++
++	rc = hypervisor_xen_domctl_memsharing_share_gfn(vgt->vm_id, gpa >> PAGE_SHIFT, handle,
++													(va) >> PAGE_SHIFT, vgt->mem_handle);
++	if (rc != 0){
++		printk("memsharing share error %d\n",rc);
++		//	goto err;
++	}
++	printk("memsharing share OK  vm=%d\n", vgt->vm_id);
++	printk("%016llx",*(uint64_t*)va);
++*/
++//	int rc = hypervisor_map_mfn_to_gpfn(vmid_2_vgt_device(0), va >> PAGE_SHIFT, mfn, 1, DPCI_ADD_MAPPING);
++//	if (rc < 0){
++//		vgt_info("memsharing fail during fault rc=%d", rc);
++//	}
++
++	page = virt_to_page(va2);
++//	int i;
++//	struct vgt_primary_plane_format primary_plane_format;
++
++//	*(uint64_t*)va2 = 0x01010101;
++//	vgt_decode_primary_plane_format(vgt, PIPE_A, &primary_plane_format);
++
++	get_page(page);
++	vmf->page = page;
++
++	return 0;
++}
++
++static const struct vm_operations_struct mmap_vm_ops = {
++		.open = mmap_open,
++		.close = mmap_close,
++		.fault = mmap_fault,
++};
++
++static int prisurfa_mmap(struct file * file, struct vm_area_struct * vm_area)
++{
++	vm_area->vm_ops = &mmap_vm_ops;
++	vm_area->vm_flags |= VM_IO ;//| VM_SHARED | VM_IO ;
++	vm_area->vm_private_data = file->private_data;
++	vgt_info("mmap");
++	mmap_open(vm_area);
++	return 0;
++}
++
++static const struct file_operations prisurfa_fops = {
++		.open = prisurfa_open,
++//		.read = seq_read,
++//		.llseek = seq_lseek,
++		.release = prisurfa_release,
++		.mmap = prisurfa_mmap,
++};
++
++
+ static inline vgt_reg_t vgt_get_mmio_value(struct pgt_device *pdev,
+ 		struct vgt_device *vgt, unsigned int reg)
+ {
+@@ -1114,6 +1284,13 @@ int vgt_create_debugfs(struct vgt_device *vgt)
+ 	else
+ 		printk("vGT(%d): create debugfs node: frame_buffer_format\n", vgt_id);
+ 
++	d_debugfs_entry[vgt_id][VGT_DEBUGFS_PIPEA_PRIMARY_SURF] = debugfs_create_file("pipea_primary_surf",
++			0444, d_per_vgt[vgt_id], vgt, &prisurfa_fops);
++	if (!d_debugfs_entry[vgt_id][VGT_DEBUGFS_FB_FORMAT])
++		printk(KERN_ERR "vGT(%d): failed to create debugfs node: pipea_primary_surf\n", vgt_id);
++	else
++		printk("vGT(%d): create debugfs node: pipea_primary_surf\n", vgt_id);
++
+ 	d_debugfs_entry[vgt_id][VGT_DEBUGFS_DPY_INFO] = debugfs_create_file("dpyinfo",
+ 			0444, d_per_vgt[vgt_id], vgt, &virt_dpyinfo_fops);
+ 
+diff --git a/drivers/gpu/drm/i915/vgt/display.c b/drivers/gpu/drm/i915/vgt/display.c
+index 08ca7a7..1afa262 100644
+--- a/drivers/gpu/drm/i915/vgt/display.c
++++ b/drivers/gpu/drm/i915/vgt/display.c
+@@ -129,6 +129,19 @@ void do_vgt_fast_display_switch(struct pgt_device *pdev)
+ 	ASSERT(fastpath_dpy_switch);
+ 	ASSERT(spin_is_locked(&pdev->lock));
+ 
++	to_vgt = pdev->next_foreground_vm;
++	if (to_vgt != current_foreground_vm(pdev)){
++		for (pipe = PIPE_A; pipe < I915_MAX_PIPES; ++ pipe) 
++//			if (_PRI_PLANE_ENABLE & __vreg(to_vgt, VGT_DSPCNTR(pipe))) {
++//				pdev->vgt_on_pipe[to_vgt->pipe_mapping[pipe]] = to_vgt;
++//				vgt_restore_state(to_vgt, pipe);
++//				set_panel_fitting(to_vgt, pipe);
++//				
++//			}
++			pdev->next_vgt_on_pipe[pipe] = to_vgt;
++		current_foreground_vm(pdev) = to_vgt;
++	}
++
+ 	for (pipe = PIPE_A; pipe < I915_MAX_PIPES; ++ pipe) 
+ 		if (pdev->next_vgt_on_pipe[pipe] != NULL ){
+ 			enum vgt_pipe vpipe;
+@@ -149,19 +162,7 @@ void do_vgt_fast_display_switch(struct pgt_device *pdev)
+ 			vgt_restore_state(to_vgt, vpipe);
+ 			set_panel_fitting(to_vgt, vpipe);
+ 			pdev->next_vgt_on_pipe[pipe] = NULL;				
+-		}
+-
+-	to_vgt = pdev->next_foreground_vm;
+-	if (to_vgt != current_foreground_vm(pdev)){
+-		for (pipe = PIPE_A; pipe < I915_MAX_PIPES; ++ pipe) 
+-			if (_PRI_PLANE_ENABLE & __vreg(to_vgt, VGT_DSPCNTR(pipe))) {
+-				pdev->vgt_on_pipe[to_vgt->pipe_mapping[pipe]] = to_vgt;
+-				vgt_restore_state(to_vgt, pipe);
+-				set_panel_fitting(to_vgt, pipe);
+-				
+-			}
+-		current_foreground_vm(pdev) = to_vgt;
+-	} 
++		} 
+ 	
+ }
+ 
+diff --git a/drivers/gpu/drm/i915/vgt/gtt.c b/drivers/gpu/drm/i915/vgt/gtt.c
+index 9d6d6d0..97a32c0 100644
+--- a/drivers/gpu/drm/i915/vgt/gtt.c
++++ b/drivers/gpu/drm/i915/vgt/gtt.c
+@@ -1246,7 +1246,7 @@ static inline bool ppgtt_get_next_level_entry(struct vgt_mm *mm,
+ 	return true;
+ }
+ 
+-static inline unsigned long vgt_gma_to_gpa(struct vgt_mm *mm, unsigned long gma)
++unsigned long vgt_gma_to_gpa(struct vgt_mm *mm, unsigned long gma)
+ {
+ 	struct vgt_device *vgt = mm->vgt;
+ 	struct pgt_device *pdev = vgt->pdev;
+diff --git a/drivers/gpu/drm/i915/vgt/handlers.c b/drivers/gpu/drm/i915/vgt/handlers.c
+index 5fca786..a173926 100644
+--- a/drivers/gpu/drm/i915/vgt/handlers.c
++++ b/drivers/gpu/drm/i915/vgt/handlers.c
+@@ -1303,6 +1303,7 @@ static bool dpy_plane_mmio_write(struct vgt_device *vgt, unsigned int offset,
+ {
+ 	unsigned int real_offset;
+ 
++
+ 	memcpy ((char *)vgt->state.vReg + offset, p_data, bytes);
+ 	memcpy ((char *)vgt->state.sReg + offset, p_data, bytes);
+ 	if (vgt_map_plane_reg(vgt, offset, &real_offset) &&
+@@ -1391,12 +1392,12 @@ static bool dpy_plane_ctl_write(struct vgt_device *vgt, unsigned int offset,
+ 
+ 	dpy_plane_mmio_write(vgt, offset, p_data, bytes);
+ 	if (enable_plane) {
+-//		if (current_foreground_vm(vgt->pdev) == vgt) {
+-		if (vgt->pdev->vgt_on_pipe[vgt->pipe_mapping[pipe]] == vgt){
++		if (current_foreground_vm(vgt->pdev) == vgt) {
++//		if (vgt->pdev->vgt_on_pipe[vgt->pipe_mapping[pipe]] == vgt){
+ 			set_panel_fitting(vgt, pipe);
+ 		} else if (is_current_display_owner(vgt)) {
+ 			p_pipe = vgt->pipe_mapping[pipe];
+-			foreground_vgt = vgt->pdev->vgt_on_pipe[p_pipe];//current_foreground_vm(vgt->pdev);
++			foreground_vgt = current_foreground_vm(vgt->pdev);
+ 			for (i = 0; i < I915_MAX_PIPES; i++) {
+ 				if (foreground_vgt->pipe_mapping[i] == p_pipe) {
+ 					v_pipe = i;
+@@ -1421,11 +1422,42 @@ static bool pri_surf_mmio_write(struct vgt_device *vgt, unsigned int offset,
+ 	enum vgt_pipe pipe = VGT_DSPSURFPIPE(offset);
+ 	unsigned int real_offset;
+ 	vgt_reg_t ret_val;
++	uint64_t gma = *(uint32_t*)p_data;
++//	uint64_t data2, data3;
++//	hypervisor_read_va(vgt, (void *)va, &data2, 4, true);
++//	hypervisor_read_va(vgt, (void *)va2, &data3, 4, true);
+ 
+ 	__vreg(vgt, offset) = *(vgt_reg_t*)p_data;
+ 	ret_val = vgt_surf_base_range_check(vgt, pipe, PRIMARY_PLANE);
+ 	__sreg(vgt, offset) = ret_val ? ret_val : __vreg(vgt, offset);
+ 
++	if(vgt->hvm_boot_foreground_visible && gma != 0) {
++		//char* data = vz;
++//		int i;
++//		uint64_t gpa = (uint64_t)vgt_gma_to_gpa(vgt->gtt.ggtt_mm, gma); //hypervisor_g2m_pfn(vgt, gva >> PAGE_SHIFT) << PAGE_SHIFT;
++//		uint64_t pa = (uint64_t)hypervisor_g2m_pfn(vgt, gpa >> PAGE_SHIFT) << PAGE_SHIFT;
++//		uint64_t va = (uint64_t)hypervisor_mfn_to_virt(pa >> PAGE_SHIFT);
++		uint64_t va2 = (uint64_t)vgt_gma_to_va(vgt->gtt.ggtt_mm, gma);
++//		uint64_t va3 = (uint64_t)hypervisor_gpa_to_va(vgt, gpa);
++
++
++
++		printk("memsharing%d, va = %llx,\n", vgt->vm_id, va2);
++
++		//hypervisor_read_va(vgt, (void *)va2, vgt->mem_buf, 4, true);
++		//printk("memsharing%d,  data = %llx\n", vgt->vm_id, data);
++
++
++		//hypervisor_read_va(vgt, (void *)va2+8, &data, 4, true);
++//		memcpy(vgt->mem_buf, (void *)va2 ,64);
++//		printk("memsharing%d,  data = ", vgt->vm_id);
++//		for(i = 0; i < 64; i++) {
++//			uint8_t * a = (uint8_t *)vgt->mem_buf;
++//			printk("%02x", *(a+i));
++//		}
++//		printk("\n");
++	}
++
+ 	__vreg(vgt, VGT_PIPE_FLIPCOUNT(pipe))++;
+ 
+ 	if (vgt_map_plane_reg(vgt, offset, &real_offset) &&
+diff --git a/drivers/gpu/drm/i915/vgt/hypercall.h b/drivers/gpu/drm/i915/vgt/hypercall.h
+index 6f83bc4..60a6d34 100644
+--- a/drivers/gpu/drm/i915/vgt/hypercall.h
++++ b/drivers/gpu/drm/i915/vgt/hypercall.h
+@@ -40,6 +40,10 @@ struct kernel_dm {
+ 	void *(*gpa_to_va)(struct vgt_device *vgt, unsigned long gap);
+ 	bool (*read_va)(struct vgt_device *vgt, void *va, void *val, int len, int atomic);
+ 	bool (*write_va)(struct vgt_device *vgt, void *va, void *val, int len, int atomic);
++	int (*memsharing_enable) (int vm_id);
++	int (*domctl_memsharing_nominate_share_gfn)(int vm_id, char * guest_addr, uint64_t * handle);
++	int (*domctl_memsharing_share_gfn) (int vm_id, uint64_t source_gfn, uint64_t source_handle,
++											uint64_t client_gfn, uint64_t client_handle);
+ };
+ 
+ #endif /* _VGT_HYPERCALL_H_ */
+diff --git a/drivers/gpu/drm/i915/vgt/interrupt.c b/drivers/gpu/drm/i915/vgt/interrupt.c
+index 309032f..a58ae62 100644
+--- a/drivers/gpu/drm/i915/vgt/interrupt.c
++++ b/drivers/gpu/drm/i915/vgt/interrupt.c
+@@ -1320,13 +1320,6 @@ static void vgt_handle_port_hotplug_phys(struct vgt_irq_host_state *hstate,
+ 		vgt_warn("IRQ: captured port hotplug event when HPD is disabled\n");
+ 	}
+ 
+-	tmp = hotplug_ctrl & ~(_REGBIT_DP_B_STATUS |
+-				_REGBIT_DP_C_STATUS |
+-				_REGBIT_DP_D_STATUS);
+-	tmp |= hotplug_ctrl & status_mask;
+-	/* write back value to clear specific port status */
+-	VGT_MMIO_WRITE(pdev, _REG_SHOTPLUG_CTL, tmp);
+-
+ 	if (hotplug_ctrl & status_mask) {
+ 		vgt_info("IRQ: detect monitor insert event on port!\n");
+ 		vgt_set_uevent(vgt_dom0, hotplug_event);
+@@ -1335,6 +1328,13 @@ static void vgt_handle_port_hotplug_phys(struct vgt_irq_host_state *hstate,
+ 		vgt_set_uevent(vgt_dom0, hotplug_event + 1);
+ 	}
+ 
++	tmp = hotplug_ctrl & ~(_REGBIT_DP_B_STATUS |
++				_REGBIT_DP_C_STATUS |
++				_REGBIT_DP_D_STATUS);
++	tmp |= hotplug_ctrl & status_mask;
++	/* write back value to clear specific port status */
++	VGT_MMIO_WRITE(pdev, _REG_SHOTPLUG_CTL, tmp);
++
+ 	if (propagate_monitor_to_guest)
+ 		vgt_set_uevent(vgt_dom0, detect_event);
+ 
+diff --git a/drivers/gpu/drm/i915/vgt/vgt.h b/drivers/gpu/drm/i915/vgt/vgt.h
+index 2c080b8..03a654f 100644
+--- a/drivers/gpu/drm/i915/vgt/vgt.h
++++ b/drivers/gpu/drm/i915/vgt/vgt.h
+@@ -762,6 +762,12 @@ struct vgt_statistics {
+ 	u64	skip_bb_cnt;
+ };
+ 
++struct mmap_info {
++	struct vgt_device *vgt;	/* the data */
++	void * data;
++	int reference;       /* how many times it is mmapped */
++};
++
+ /* per-VM structure */
+ typedef cycles_t vgt_tslice_t;
+ struct vgt_sched_info {
+@@ -884,6 +890,8 @@ struct vgt_device {
+ 
+ 	struct gt_port		ports[I915_MAX_PORTS]; /* one port per PIPE */
+ 	struct vgt_i2c_edid_t	vgt_i2c_edid;	/* i2c bus state emulaton for reading EDID */
++	void*		mem_buf;
++	uint64_t	mem_handle;
+ 
+ 	uint64_t	aperture_base;
+ 	void		*aperture_base_va;
+@@ -2761,7 +2769,7 @@ extern bool gtt_emulate_write(struct vgt_device *vgt, unsigned int off,
+ #define INVALID_ADDR (~0UL)
+ 
+ extern void* vgt_gma_to_va(struct vgt_mm *mm, unsigned long gma);
+-
++extern unsigned long vgt_gma_to_gpa(struct vgt_mm *mm, unsigned long gma);
+ 
+ #define INVALID_MFN	(~0UL)
+ 
+@@ -2921,6 +2929,24 @@ static inline void reset_el_structure(struct pgt_device *pdev,
+ 
+ extern struct kernel_dm *vgt_pkdm;
+ 
++//static inline int hypervisor_memsharing_enable(struct vgt_device *vgt)
++//{
++//	return vgt_pkdm->memsharing_enable(vgt->vm_id);
++//}
++
++static inline __attribute__((unused)) int hypervisor_xen_domctl_memsharing_share_gfn
++		(int vm_id, uint64_t source_gfn, uint64_t source_handle,
++		 uint64_t client_gfn, uint64_t client_handle)
++{
++	return vgt_pkdm->domctl_memsharing_share_gfn(vm_id, source_gfn, source_handle,client_gfn, client_handle);
++}
++
++static inline int hypervisor_xen_domctl_memsharing_nominate_share_gfn
++		(int vm_id, char * guest_addr, uint64_t * handle)
++{
++	return vgt_pkdm->domctl_memsharing_nominate_share_gfn(vm_id, guest_addr, handle);
++}
++
+ static inline unsigned long hypervisor_g2m_pfn(struct vgt_device *vgt,
+ 	unsigned long g_pfn)
+ {
+diff --git a/drivers/xen/xengt.c b/drivers/xen/xengt.c
+index 37360ff..db92660 100644
+--- a/drivers/xen/xengt.c
++++ b/drivers/xen/xengt.c
+@@ -46,8 +46,13 @@
+ #include <xen/interface/memory.h>
+ #include <xen/interface/platform.h>
+ #include <xen/interface/vcpu.h>
++//#include <linux/slab.h>
++//#include <linux/err.h>
++//#include <asm-generic/page.h>
++//#include <xen/xen.h>
+ 
+ #include "vgt.h"
++//#include "../gpu/drm/i915/vgt/vgt.h"
+ 
+ MODULE_AUTHOR("Intel Corporation");
+ MODULE_DESCRIPTION("XenGT mediated passthrough driver");
+@@ -83,6 +88,66 @@ struct vgt_hvm_info {
+ 	struct vm_struct **vmem_vma_4k;
+ };
+ 
++/* enable memory sharing in xen so we can share pages instead of copying them */
++int xen_domctl_memsharing_enable(int vm_id){
++	int rc;
++	struct xen_domctl domctl;
++
++	domctl.domain = vm_id;
++	domctl.cmd = XEN_DOMCTL_mem_sharing_op;
++    domctl.interface_version = XEN_DOMCTL_INTERFACE_VERSION;
++    domctl.u.mem_sharing_op.op = XEN_DOMCTL_MEM_SHARING_CONTROL;
++    domctl.u.mem_sharing_op.u.enable = true;
++
++    rc = HYPERVISOR_domctl(&domctl);
++	if (rc != 0)
++		printk("HYPERVISOR_domctl XEN_DOMCTL_MEM_SHARING_CONTROL fail with %d!\n", rc);
++
++	return rc;
++}
++
++static int xen_domctl_memsharing_nominate_share_gfn(int vm_id, char * guest_addr, uint64_t * handle)
++{
++	int rc;
++	struct xen_mem_sharing_op mso;
++	memset(&mso, 0, sizeof(mso));
++
++	mso.op = XENMEM_sharing_op_nominate_gfn;
++	mso.domain = vm_id;
++	mso.u.nominate.u.gfn = (u_int64_t)guest_addr >> PAGE_SHIFT;
++
++	rc = HYPERVISOR_memory_op(XENMEM_sharing_op_nominate_gfn, &mso);
++	if(rc < 0)
++		printk(" failed to nominate gfn for share err=%d\n", rc);
++
++
++	(*handle) = mso.u.nominate.handle;
++	return rc;
++}
++
++static int xen_domctl_memsharing_share_gfn(int vm_id, uint64_t source_gfn, uint64_t source_handle,
++		uint64_t client_gfn, uint64_t client_handle)
++{
++	int rc;
++	struct xen_mem_sharing_op mso;
++	memset(&mso, 0, sizeof(mso));
++
++	mso.op = XENMEM_sharing_op_share;
++	mso.domain = vm_id;
++	mso.u.share.client_gfn = client_gfn;
++	mso.u.share.client_handle = client_handle;
++	mso.u.share.source_gfn = source_gfn;
++	mso.u.share.source_handle = source_handle;
++	mso.u.share.client_domain = 0;
++
++	rc = HYPERVISOR_memory_op(XENMEM_sharing_op_share, &mso);
++	if(rc < 0)
++		printk(" failed to share gfns  err=%d\n", rc);
++
++	return rc;
++}
++
++
+ /* Translate from VM's guest pfn to machine pfn */
+ static unsigned long xen_g2m_pfn(int vm_id, unsigned long g_pfn)
+ {
+@@ -952,6 +1017,7 @@ static int xen_hvm_init(struct vgt_device *vgt)
+ 	int vcpu, irq, rc = 0;
+ 	struct task_struct *thread;
+ 	struct pgt_device *pdev = vgt->pdev;
++	char * test_buffer1;
+ 
+ 	info = kzalloc(sizeof(struct vgt_hvm_info), GFP_KERNEL);
+ 	if (info == NULL)
+@@ -1001,6 +1067,35 @@ static int xen_hvm_init(struct vgt_device *vgt)
+ 		info->evtchn_irq[vcpu] = irq;
+ 	}
+ 
++	rc = xen_domctl_memsharing_enable(vgt->vm_id);
++	if (rc != 0){
++		printk("memsharing _enable error %d\n",rc);
++	//	goto err;
++	}
++
++	printk("memsharing _enable OK  vm = %d \n", vgt->vm_id);
++
++	vgt->mem_buf = (void *)get_zeroed_page(GFP_KERNEL);
++
++	rc = xen_domctl_memsharing_nominate_share_gfn(0, test_buffer1, &vgt->mem_handle);
++	if (rc != 0){
++		printk("memsharing _nominate error %d\n",rc);
++		//	goto err;
++	}
++	printk("memsharing _nominate OK  vm=%d\n", vgt->vm_id);
++
++//	rc = xen_domctl_memsharing_share_gfn(0,
++//			(uint64_t)test_buffer2 >> PAGE_SHIFT, handle2,
++//			(uint64_t)test_buffer1 >> PAGE_SHIFT, handle1);
++//	if (rc != 0){
++//		printk("memsharing _share error %d\n",rc);
++//		//	goto err;
++//	}
++//	printk("memsharing _share OK  vm=%d\n", vgt->vm_id);
++//
++//	printk("memsharing result buf1 = %lld, buf2 = %lld\n",
++//		   *(uint64_t *)test_buffer1,*(uint64_t *)test_buffer2);
++
+ 	thread = kthread_run(vgt_emulation_thread, vgt,
+ 			"vgt_emulation:%d", vgt->vm_id);
+ 	if(IS_ERR(thread))
+@@ -1072,6 +1167,7 @@ static bool xen_write_va(struct vgt_device *vgt, void *va, void *val,
+ 	return true;
+ }
+ 
++
+ static struct kernel_dm xen_kdm = {
+ 	.g2m_pfn = xen_g2m_pfn,
+ 	.pause_domain = xen_pause_domain,
+@@ -1089,6 +1185,9 @@ static struct kernel_dm xen_kdm = {
+ 	.gpa_to_va = xen_gpa_to_va,
+ 	.read_va = xen_read_va,
+ 	.write_va = xen_write_va,
++//	.memsharing_enable = xen_domctl_memsharing_enable,
++	.domctl_memsharing_nominate_share_gfn = xen_domctl_memsharing_nominate_share_gfn,
++	.domctl_memsharing_share_gfn = xen_domctl_memsharing_share_gfn,
+ };
+ 
+ struct kernel_dm *vgt_pkdm = &xen_kdm;
+diff --git a/include/xen/interface/memory.h b/include/xen/interface/memory.h
+index 6b16a42..90a0026 100644
+--- a/include/xen/interface/memory.h
++++ b/include/xen/interface/memory.h
+@@ -274,6 +274,69 @@ DEFINE_GUEST_HANDLE_STRUCT(xen_get_mfn_from_pfn);
+  */
+ extern spinlock_t xen_reservation_lock;
+ 
++#ifndef uint64_aligned_t
++#define uint64_aligned_t uint64_t
++#endif
++
++#define XENMEM_sharing_op                   22
++#define XENMEM_sharing_op_nominate_gfn      0
++#define XENMEM_sharing_op_nominate_gref     1
++#define XENMEM_sharing_op_share             2
++#define XENMEM_sharing_op_resume            3
++#define XENMEM_sharing_op_debug_gfn         4
++#define XENMEM_sharing_op_debug_mfn         5
++#define XENMEM_sharing_op_debug_gref        6
++#define XENMEM_sharing_op_add_physmap       7
++#define XENMEM_sharing_op_audit             8
++
++#define XENMEM_SHARING_OP_S_HANDLE_INVALID  (-10)
++#define XENMEM_SHARING_OP_C_HANDLE_INVALID  (-9)
++
++/* The following allows sharing of grant refs. This is useful
++ * for sharing utilities sitting as "filters" in IO backends
++ * (e.g. memshr + blktap(2)). The IO backend is only exposed
++ * to grant references, and this allows sharing of the grefs */
++#define XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG   (1ULL << 62)
++
++#define XENMEM_SHARING_OP_FIELD_MAKE_GREF(field, val)  \
++    (field) = (XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG | val)
++#define XENMEM_SHARING_OP_FIELD_IS_GREF(field)         \
++    ((field) & XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG)
++#define XENMEM_SHARING_OP_FIELD_GET_GREF(field)        \
++    ((field) & (~XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG))
++
++struct xen_mem_sharing_op {
++    uint8_t     op;     /* XENMEM_sharing_op_* */
++    domid_t     domain;
++
++    union {
++        struct mem_sharing_op_nominate {  /* OP_NOMINATE_xxx           */
++            union {
++                uint64_aligned_t gfn;     /* IN: gfn to nominate       */
++                uint32_t      grant_ref;  /* IN: grant ref to nominate */
++            } u;
++            uint64_aligned_t  handle;     /* OUT: the handle           */
++        } nominate;
++        struct mem_sharing_op_share {     /* OP_SHARE/ADD_PHYSMAP */
++            uint64_aligned_t source_gfn;    /* IN: the gfn of the source page */
++            uint64_aligned_t source_handle; /* IN: handle to the source page */
++            uint64_aligned_t client_gfn;    /* IN: the client gfn */
++            uint64_aligned_t client_handle; /* IN: handle to the client page */
++            domid_t  client_domain; /* IN: the client domain id */
++        } share;
++        struct mem_sharing_op_debug {     /* OP_DEBUG_xxx */
++            union {
++                uint64_aligned_t gfn;      /* IN: gfn to debug          */
++                uint64_aligned_t mfn;      /* IN: mfn to debug          */
++                uint32_t gref;     /* IN: gref to debug         */
++            } u;
++        } debug;
++    } u;
++};
++typedef struct xen_mem_sharing_op xen_mem_sharing_op_t;
++DEFINE_GUEST_HANDLE_STRUCT(xen_mem_sharing_op_t);
++
++
+ /*
+  * Unmaps the page appearing at a particular GPFN from the specified guest's
+  * pseudophysical address space.
+diff --git a/include/xen/interface/xen.h b/include/xen/interface/xen.h
+index aacc4e4..dd360f9 100644
+--- a/include/xen/interface/xen.h
++++ b/include/xen/interface/xen.h
+@@ -795,8 +795,55 @@ DEFINE_GUEST_HANDLE_STRUCT(xen_domctl_getdomaininfo);
+ #define XEN_DOMCTL_INTERFACE_VERSION 0x0000000a
+ #define XEN_DOMCTL_pausedomain                    3
+ #define XEN_DOMCTL_getdomaininfo                  5
+-#define XEN_DOMCTL_memory_mapping                 39
+-#define XEN_DOMCTL_iomem_permission               20
++#define XEN_DOMCTL_memory_mapping                39
++#define XEN_DOMCTL_iomem_permission              20
++#define XEN_DOMCTL_mem_sharing_op                57
++
++/*
++ * Sharing ENOMEM helper.
++ *
++ * As with paging, use the domctl for teardown/setup of the
++ * helper<->hypervisor interface.
++ *
++ * If setup, this ring is used to communicate failed allocations
++ * in the unshare path. XENMEM_sharing_op_resume is used to wake up
++ * vcpus that could not unshare.
++ *
++ * Note that shring can be turned on (as per the domctl below)
++ * *without* this ring being setup.
++ */
++#define XEN_DOMCTL_MEM_EVENT_OP_SHARING           3
++
++#define XEN_DOMCTL_MEM_EVENT_OP_SHARING_ENABLE    0
++#define XEN_DOMCTL_MEM_EVENT_OP_SHARING_DISABLE   1
++
++/* Use for teardown/setup of helper<->hypervisor interface for paging, 
++ * access and sharing.*/
++struct xen_domctl_mem_event_op {
++    uint32_t       op;           /* XEN_DOMCTL_MEM_EVENT_OP_*_* */
++    uint32_t       mode;         /* XEN_DOMCTL_MEM_EVENT_OP_* */
++
++    uint32_t port;              /* OUT: event channel for ring */
++};
++typedef struct xen_domctl_mem_event_op xen_domctl_mem_event_op_t;
++DEFINE_GUEST_HANDLE_STRUCT(xen_domctl_mem_event_op_t);
++
++/*
++ * Memory sharing operations
++ */
++/* XEN_DOMCTL_mem_sharing_op.
++ * The CONTROL sub-domctl is used for bringup/teardown. */
++#define XEN_DOMCTL_MEM_SHARING_CONTROL          0
++
++struct xen_domctl_mem_sharing_op {
++    uint8_t op; /* XEN_DOMCTL_MEM_SHARING_* */
++
++    union {
++        uint8_t enable;                   /* CONTROL */
++    } u;
++};
++typedef struct xen_domctl_mem_sharing_op xen_domctl_mem_sharing_op_t;
++DEFINE_GUEST_HANDLE_STRUCT(xen_domctl_mem_sharing_op_t);
+ 
+ 
+ #define XEN_DOMCTL_vgt_io_trap			  700
+@@ -848,6 +895,7 @@ struct xen_domctl {
+ 		struct xen_domctl_vgt_io_trap       vgt_io_trap;
+ 		struct xen_domctl_memory_mapping    memory_mapping;
+ 		struct xen_domctl_iomem_permission 	iomem_perm;
++		struct xen_domctl_mem_sharing_op    mem_sharing_op;
+ 		uint8_t                             pad[256];
+ 	}u;
+ };
 -- 
 1.9.1
 
